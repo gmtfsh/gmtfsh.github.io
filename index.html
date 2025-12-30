@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音符クイズ - Web版</title>
+    <style>
+        body {
+            font-family: "MS Gothic", "Hiragino Sans", sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f2f5;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .info-panel {
+            display: flex;
+            gap: 20px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .mode-selection, .settings {
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 10px;
+        }
+
+        .clef-indicator {
+            width: 300px;
+            text-align: center;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: white;
+            margin-bottom: 10px;
+            transition: background-color 0.3s;
+        }
+
+        canvas {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .message {
+            margin: 15px;
+            font-size: 1.1rem;
+            height: 1.5em;
+        }
+
+        .btn-container {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        button.note-btn {
+            width: 60px;
+            height: 60px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            background-color: #fff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            transition: transform 0.1s, background-color 0.2s;
+        }
+
+        button.note-btn:active {
+            transform: scale(0.95);
+        }
+
+        button.note-btn:hover {
+            background-color: #e9ecef;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="info-panel">
+        <div id="score">スコア: 0</div>
+        <div id="timer">タイム: 0.00s</div>
+    </div>
+
+    <div class="mode-selection">
+        出題範囲: 
+        <input type="radio" name="mode" value="Both" id="mBoth" checked> <label for="mBoth">両方</label>
+        <input type="radio" name="mode" value="Treble" id="mTreble"> <label for="mTreble">ト音のみ</label>
+        <input type="radio" name="mode" value="Bass" id="mBass"> <label for="mBass">ヘ音のみ</label>
+    </div>
+
+    <div class="settings">
+        <input type="checkbox" id="showGuide"> <label for="showGuide">音階ガイドを表示</label>
+        <input type="checkbox" id="isJapanese"> <label for="isJapanese">日本語表示 (ドレミ)</label>
+    </div>
+
+    <div id="clefLabel" class="clef-indicator">ト音記号 (𝄞)</div>
+
+    <canvas id="staffCanvas" width="500" height="220"></canvas>
+
+    <div id="msg" class="message">この音は何？</div>
+
+    <div class="btn-container" id="btnContainer">
+    </div>
+
+<script>
+    const canvas = document.getElementById('staffCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // データ設定
+    const TREBLE_NOTES = [
+        ["C", 60], ["D", 50], ["E", 40], ["F", 30], ["G", 20], ["A", 10], 
+        ["B", 0], ["C", -10], ["D", -20], ["E", -30], ["F", -40], ["G", -50], ["A", -60]
+    ];
+    const BASS_NOTES = [
+        ["E", 60], ["F", 50], ["G", 40], ["A", 30], ["B", 20], ["C", 10], 
+        ["D", 0], ["E", -10], ["F", -20], ["G", -30], ["A", -40], ["B", -50], ["C", -60]
+    ];
+    const NOTE_NAME_MAP = { "C": "ド", "D": "レ", "E": "ミ", "F": "ファ", "G": "ソ", "A": "ラ", "B": "シ" };
+
+    let score = 0;
+    let currentClef = "Treble";
+    let currentNote = null;
+    let startTime = 0;
+    let canAnswer = true;
+
+    // 初期化
+    function init() {
+        createButtons();
+        setupEventListeners();
+        nextQuestion();
+    }
+
+    function createButtons() {
+        const container = document.getElementById('btnContainer');
+        const notes = ["C", "D", "E", "F", "G", "A", "B"];
+        container.innerHTML = '';
+        notes.forEach(note => {
+            const btn = document.createElement('button');
+            btn.className = 'note-btn';
+            btn.innerText = getDisplayName(note);
+            btn.onclick = () => checkAnswer(note);
+            container.appendChild(btn);
+        });
+    }
+
+    function getDisplayName(englishName) {
+        const isJp = document.getElementById('isJapanese').checked;
+        return isJp ? NOTE_NAME_MAP[englishName] : englishName;
+    }
+
+    function setupEventListeners() {
+        document.getElementById('isJapanese').addEventListener('change', () => {
+            createButtons();
+            draw();
+        });
+        document.getElementById('showGuide').addEventListener('change', draw);
+        document.querySelectorAll('input[name="mode"]').forEach(radio => {
+            radio.addEventListener('change', nextQuestion);
+        });
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 五線譜の描画
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 5; i++) {
+            let y = 70 + i * 20;
+            ctx.beginPath();
+            ctx.moveTo(50, y);
+            ctx.lineTo(350, y);
+            ctx.stroke();
+        }
+
+        // 記号表示の更新（変更点：文字から記号描画へ）
+        const label = document.getElementById('clefLabel');
+        ctx.fillStyle = "#000"; // 譜面上の記号は黒色に設定
+        if (currentClef === "Treble") {
+            label.innerText = "ト音記号 (𝄞)";
+            label.style.backgroundColor = "#2196F3";
+            
+            // ト音記号 (G-Clef) の描画
+            ctx.font = "80px serif";
+            ctx.fillText("𝄞", 55, 155); 
+        } else {
+            label.innerText = "ヘ音記号 (𝄢)";
+            label.style.backgroundColor = "#F44336";
+            
+            // ヘ音記号 (F-Clef) の描画
+            ctx.font = "60px serif";
+            ctx.fillText("𝄢", 55, 115);
+        }
+
+        // ガイド表示
+        if (document.getElementById('showGuide').checked) {
+            drawGuide();
+        }
+
+        // 現在の音符描画
+        if (currentNote) {
+            drawNote(currentNote, 200, "black");
+        }
+    }
+
+    function drawNote(noteData, x, color) {
+        const [name, offsetY] = noteData;
+        const y = 110 + offsetY;
+
+        // 加線 (下)
+        if (y >= 170) {
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 2;
+            for(let lineY = 170; lineY <= y; lineY += 20) {
+                ctx.beginPath(); ctx.moveTo(x-20, lineY); ctx.lineTo(x+20, lineY); ctx.stroke();
+            }
+        }
+        // 加線 (上)
+        if (y <= 50) {
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 2;
+            for(let lineY = 50; lineY >= y; lineY -= 20) {
+                ctx.beginPath(); ctx.moveTo(x-20, lineY); ctx.lineTo(x+20, lineY); ctx.stroke();
+            }
+        }
+
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.ellipse(x, y, 12, 9, 0, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    function drawGuide() {
+        const pool = currentClef === "Treble" ? TREBLE_NOTES : BASS_NOTES;
+        const startX = 380;
+        ctx.fillStyle = "#000";
+        ctx.font = "bold 12px sans-serif";
+        ctx.fillText("音階ガイド", startX + 10, 30);
+
+        pool.forEach(([name, offsetY]) => {
+            const y = 110 + offsetY;
+            const x = startX + 20;
+            
+            // ガイドの小さな音符
+            ctx.fillStyle = "gray";
+            ctx.beginPath();
+            ctx.ellipse(x, y, 5, 4, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // ガイドの文字
+            ctx.fillStyle = "#333";
+            ctx.font = "bold 10px Arial";
+            ctx.fillText(getDisplayName(name), x + 20, y + 4);
+        });
+    }
+
+    function nextQuestion() {
+        canAnswer = true;
+        document.getElementById('msg').innerText = "この音は何？";
+        document.getElementById('msg').style.color = "black";
+
+        const mode = document.querySelector('input[name="mode"]:checked').value;
+        if (mode === "Both") {
+            currentClef = Math.random() > 0.5 ? "Treble" : "Bass";
+        } else {
+            currentClef = mode;
+        }
+
+        const pool = currentClef === "Treble" ? TREBLE_NOTES : BASS_NOTES;
+        currentNote = pool[Math.floor(Math.random() * pool.length)];
+
+        draw();
+        startTime = Date.now();
+    }
+
+    function checkAnswer(guess) {
+        if (!canAnswer) return;
+        canAnswer = false;
+
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+        document.getElementById('timer').innerText = `タイム: ${elapsed}s`;
+
+        const correctEng = currentNote[0];
+        const msgEl = document.getElementById('msg');
+
+        if (guess === correctEng) {
+            score += 10;
+            msgEl.innerText = `正解！ ✨ (${elapsed}秒)`;
+            msgEl.style.color = "green";
+        } else {
+            score = Math.max(0, score - 5);
+            msgEl.innerText = `残念！正解は ${getDisplayName(correctEng)} (${elapsed}秒)`;
+            msgEl.style.color = "red";
+        }
+
+        document.getElementById('score').innerText = `スコア: ${score}`;
+        setTimeout(nextQuestion, 800);
+    }
+
+    init();
+</script>
+</body>
+</html>
